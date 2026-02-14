@@ -4,6 +4,7 @@
 #include "../Models/Note.h"
 #include "../Models/Project.h"
 #include "../Utils/Constants.h"
+#include "../Utils/UndoManager.h"
 #include "../Utils/UI/Theme.h"
 
 class DarkLookAndFeel;  // Forward declaration
@@ -20,10 +21,12 @@ public:
     void resized() override;
 
     void sliderValueChanged(juce::Slider* slider) override;
+    void sliderDragStarted(juce::Slider* slider) override;
     void sliderDragEnded(juce::Slider* slider) override;
     void buttonClicked(juce::Button* button) override;
 
     void setProject(Project* proj);
+    void setUndoManager(PitchUndoManager* mgr) { undoManager = mgr; }
     void setSelectedNote(Note* note);
     void updateFromNote();
     void updateGlobalSliders();
@@ -41,7 +44,12 @@ private:
 
     Project* project = nullptr;
     Note* selectedNote = nullptr;
+    PitchUndoManager* undoManager = nullptr;
     bool isUpdating = false;  // Prevent feedback loops
+    bool pitchOffsetDragging = false;
+    bool noteVolumeDragging = false;
+    float dragStartPitchOffset = 0.0f;
+    float dragStartNoteVolumeDb = 0.0f;
 
     // Note info
     juce::Label noteInfoLabel;
@@ -51,6 +59,8 @@ private:
     juce::Label pitchSectionLabel { {}, "Pitch" };
     juce::Slider pitchOffsetSlider;
     juce::Label pitchOffsetLabel { {}, "Offset (semitones):" };
+    juce::Slider noteVolumeSlider;
+    juce::Label noteVolumeLabel { {}, "Note Volume (dB):" };
     juce::Rectangle<int> pitchCardBounds;
 
     // Volume control (using rotary knob style)

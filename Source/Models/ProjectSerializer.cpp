@@ -27,6 +27,7 @@ juce::var ProjectSerializer::toJson(const Project& project) {
     obj->setProperty("formatVersion", FORMAT_VERSION);
     obj->setProperty("name", project.getName());
     obj->setProperty("audioPath", project.getFilePath().getFullPathName());
+    obj->setProperty("audioSha256", project.getAudioSha256());
 
     // Audio settings
     obj->setProperty("sampleRate", project.getAudioData().sampleRate);
@@ -64,6 +65,7 @@ bool ProjectSerializer::fromJson(Project& project, const juce::var& json) {
     // Metadata
     project.setName(json.getProperty("name", "Untitled").toString());
     project.setFilePath(juce::File(json.getProperty("audioPath", "").toString()));
+    project.setAudioSha256(json.getProperty("audioSha256", "").toString());
 
     // Audio settings
     auto& audioData = project.getAudioData();
@@ -117,6 +119,7 @@ juce::var ProjectSerializer::noteToJson(const Note& note) {
     obj->setProperty("endFrame", note.getEndFrame());
     obj->setProperty("midiNote", note.getMidiNote());
     obj->setProperty("pitchOffset", note.getPitchOffset());
+    obj->setProperty("volumeDb", note.getVolumeDb());
     obj->setProperty("rest", note.isRest());
 
     // Vibrato
@@ -144,6 +147,7 @@ bool ProjectSerializer::noteFromJson(Note& note, const juce::var& json) {
     note.setEndFrame(json.getProperty("endFrame", 0));
     note.setMidiNote(static_cast<float>(json.getProperty("midiNote", 60.0)));
     note.setPitchOffset(static_cast<float>(json.getProperty("pitchOffset", 0.0)));
+    note.setVolumeDb(static_cast<float>(json.getProperty("volumeDb", 0.0)));
     note.setRest(json.getProperty("rest", false));
 
     // Vibrato

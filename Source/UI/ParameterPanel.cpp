@@ -1,6 +1,7 @@
 #include "ParameterPanel.h"
 #include "StyledComponents.h"
 #include "../Utils/Localization.h"
+#include <cmath>
 
 ParameterPanel::ParameterPanel()
 {
@@ -12,6 +13,7 @@ ParameterPanel::ParameterPanel()
 
     // Setup sliders
     setupSlider(pitchOffsetSlider, pitchOffsetLabel, TR("param.pitch_offset"), -24.0, 24.0, 0.0);
+    setupSlider(noteVolumeSlider, noteVolumeLabel, "Note Volume (dB)", -24.0, 12.0, 0.0);
 
     // Volume knob setup
     addAndMakeVisible(volumeKnob);
@@ -123,12 +125,15 @@ void ParameterPanel::resized()
     bounds.removeFromTop(cardGap);
 
     // Pitch card
-    pitchCardBounds = bounds.removeFromTop(92);
+    pitchCardBounds = bounds.removeFromTop(122);
     auto pitchArea = pitchCardBounds.reduced(10);
     pitchSectionLabel.setBounds(pitchArea.removeFromTop(18));
     pitchArea.removeFromTop(6);
     pitchOffsetLabel.setBounds(pitchArea.removeFromTop(18));
     pitchOffsetSlider.setBounds(pitchArea.removeFromTop(26));
+    pitchArea.removeFromTop(4);
+    noteVolumeLabel.setBounds(pitchArea.removeFromTop(18));
+    noteVolumeSlider.setBounds(pitchArea.removeFromTop(26));
     bounds.removeFromTop(cardGap);
 
     // Volume card
@@ -174,6 +179,14 @@ void ParameterPanel::sliderValueChanged(juce::Slider* slider)
         if (onParameterChanged)
             onParameterChanged();
     }
+    else if (slider == &noteVolumeSlider && selectedNote)
+    {
+        selectedNote->setVolumeDb(static_cast<float>(slider->getValue()));
+        selectedNote->markDirty();
+
+        if (onParameterChanged)
+            onParameterChanged();
+    }
     else if (slider == &globalPitchSlider && project)
     {
         project->setGlobalPitchOffset(static_cast<float>(slider->getValue()));
@@ -197,11 +210,65 @@ void ParameterPanel::sliderValueChanged(juce::Slider* slider)
     }
 }
 
+void ParameterPanel::sliderDragStarted(juce::Slider* slider)
+{
+    if (isUpdating)
+        return;
+
+    if (slider == &pitchOffsetSlider && selectedNote)
+    {
+        pitchOffsetDragging = true;
+        dragStartPitchOffset = selectedNote->getPitchOffset();
+    }
+    else if (slider == &noteVolumeSlider && selectedNote)
+    {
+        noteVolumeDragging = true;
+        dragStartNoteVolumeDb = selectedNote->getVolumeDb();
+    }
+}
+
 void ParameterPanel::sliderDragEnded(juce::Slider* slider)
 {
     if (slider == &pitchOffsetSlider && selectedNote)
     {
+        if (pitchOffsetDragging && undoManager)
+        {
+            const float endPitchOffset = selectedNote->getPitchOffset();
+            if (std::abs(endPitchOffset - dragStartPitchOffset) > 1.0e-6f)
+            {
+                auto action = std::make_unique<PitchOffsetAction>(
+                    selectedNote, dragStartPitchOffset, endPitchOffset,
+                    [this](Note* note) {
+                        if (note)
+                            note->markDirty();
+                    });
+                undoManager->addAction(std::move(action));
+            }
+        }
+        pitchOffsetDragging = false;
+
         // Trigger incremental synthesis when slider drag ends
+        if (onParameterEditFinished)
+            onParameterEditFinished();
+    }
+    else if (slider == &noteVolumeSlider && selectedNote)
+    {
+        if (noteVolumeDragging && undoManager)
+        {
+            const float endVolumeDb = selectedNote->getVolumeDb();
+            if (std::abs(endVolumeDb - dragStartNoteVolumeDb) > 1.0e-6f)
+            {
+                auto action = std::make_unique<NoteVolumeAction>(
+                    selectedNote, dragStartNoteVolumeDb, endVolumeDb,
+                    [this](Note* note) {
+                        if (note)
+                            note->markDirty();
+                    });
+                undoManager->addAction(std::move(action));
+            }
+        }
+        noteVolumeDragging = false;
+
         if (onParameterEditFinished)
             onParameterEditFinished();
     }
@@ -249,12 +316,16 @@ void ParameterPanel::updateFromNote()
 
         pitchOffsetSlider.setValue(selectedNote->getPitchOffset());
         pitchOffsetSlider.setEnabled(true);
+        noteVolumeSlider.setValue(selectedNote->getVolumeDb());
+        noteVolumeSlider.setEnabled(true);
     }
     else
     {
         noteInfoLabel.setText(TR("param.no_selection"), juce::dontSendNotification);
         pitchOffsetSlider.setValue(0.0);
         pitchOffsetSlider.setEnabled(false);
+        noteVolumeSlider.setValue(0.0);
+        noteVolumeSlider.setEnabled(false);
     }
 
     isUpdating = false;

@@ -1,4 +1,5 @@
 #include "EditorController.h"
+#include "../Utils/SHA256Utils.h"
 #include "../Utils/Constants.h"
 #include "../Utils/F0Smoother.h"
 #include "../Utils/Localization.h"
@@ -255,6 +256,7 @@ void EditorController::loadAudioFileAsync(
     updateProgress(0.22, "Preparing project...");
     auto newProject = std::make_unique<Project>();
     newProject->setFilePath(file);
+    newProject->setAudioSha256(SHA256Utils::fileSHA256(file));
     auto &audioData = newProject->getAudioData();
     audioData.waveform = std::move(buffer);
     audioData.sampleRate = SAMPLE_RATE;

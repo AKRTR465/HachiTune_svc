@@ -89,6 +89,18 @@ void SettingsManager::loadConfig() {
         if (lastFile.isNotEmpty())
           lastFilePath = juce::File(lastFile);
 
+        if (configObj->hasProperty("recentFiles")) {
+          auto recentVar = configObj->getProperty("recentFiles");
+          if (recentVar.isArray()) {
+            recentFiles.clear();
+            for (int i = 0; i < recentVar.size(); ++i) {
+              auto path = recentVar[i].toString();
+              if (path.isNotEmpty())
+                recentFiles.add(path);
+            }
+          }
+        }
+
         if (configObj->hasProperty("windowWidth"))
           windowWidth = static_cast<int>(configObj->getProperty("windowWidth"));
         if (configObj->hasProperty("windowHeight"))
@@ -131,6 +143,13 @@ void SettingsManager::saveConfig() {
 
   if (lastFilePath.existsAsFile())
     config->setProperty("lastFile", lastFilePath.getFullPathName());
+
+  if (!recentFiles.isEmpty()) {
+    juce::Array<juce::var> recentArray;
+    for (const auto &path : recentFiles)
+      recentArray.add(path);
+    config->setProperty("recentFiles", recentArray);
+  }
 
   config->setProperty("windowWidth", windowWidth);
   config->setProperty("windowHeight", windowHeight);

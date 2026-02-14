@@ -34,6 +34,8 @@ public:
   void saveConfig();
   void setLastFilePath(const juce::File &file) { lastFilePath = file; }
   juce::File getLastFilePath() const { return lastFilePath; }
+  void setRecentFiles(const juce::StringArray &files) { recentFiles = files; }
+  const juce::StringArray &getRecentFiles() const { return recentFiles; }
   void setWindowSize(int w, int h) {
     windowWidth = w;
     windowHeight = h;
@@ -73,6 +75,7 @@ private:
 
   // Config
   juce::File lastFilePath;
+  juce::StringArray recentFiles;
   int windowWidth = 1200;
   int windowHeight = 800;
   bool showDeltaPitch = true;

@@ -1,6 +1,7 @@
 #include "IncrementalSynthesizer.h"
 #include "../../Utils/Localization.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 IncrementalSynthesizer::IncrementalSynthesizer() = default;
@@ -355,6 +356,41 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
                 b * synth + (1.0f - b) * orig;
           }
 
+          // Apply per-note gain on top of the blended target.
+          // Gain is piecewise-constant per note region.
+          std::vector<float> sampleGain(static_cast<size_t>(samplesToWrite),
+                                        1.0f);
+          for (const auto &note : capturedProject->getNotes()) {
+            if (note.isRest())
+              continue;
+            if (std::abs(note.getVolumeDb()) < 0.001f)
+              continue;
+
+            const int noteStart = note.getStartFrame();
+            const int noteEnd = note.getEndFrame();
+            const int overlapStart = std::max(capturedStartFrame, noteStart);
+            const int overlapEnd = std::min(capturedEndFrame, noteEnd);
+            if (overlapEnd <= overlapStart)
+              continue;
+
+            const int localStart = (overlapStart - capturedStartFrame) * hopSize;
+            const int localEnd = (overlapEnd - capturedStartFrame) * hopSize;
+            if (localStart >= samplesToWrite)
+              continue;
+
+            const float gain =
+                juce::Decibels::decibelsToGain(note.getVolumeDb(), -60.0f);
+            const int clampedStart = std::max(0, localStart);
+            const int clampedEnd = std::min(samplesToWrite, localEnd);
+            for (int i = clampedStart; i < clampedEnd; ++i) {
+              sampleGain[static_cast<size_t>(i)] *= gain;
+            }
+          }
+          for (int i = 0; i < samplesToWrite; ++i) {
+            targetSegment[static_cast<size_t>(i)] *=
+                sampleGain[static_cast<size_t>(i)];
+          }
+
           // Stitch target using original segment as reference:
           // final = original + edgeEnv * (target - original)
           // This avoids cumulative old/new layering across repeated edits.
@@ -392,4 +428,3 @@ void IncrementalSynthesizer::synthesizeRegion(ProgressCallback onProgress,
         }).detach();
       });
 }
-

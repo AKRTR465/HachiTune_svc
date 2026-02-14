@@ -37,6 +37,19 @@ juce::PopupMenu MenuHandler::getMenuForIndex(int menuIndex, const juce::String& 
             // File menu
             if (commandManager) {
                 menu.addCommandItem(commandManager, CommandIDs::openFile);
+                juce::PopupMenu recentMenu;
+                if (recentFiles.isEmpty()) {
+                    recentMenu.addItem(1, "No Recent Files", false, false);
+                } else {
+                    const int count = juce::jmin(kMaxRecentMenuItems, recentFiles.size());
+                    for (int i = 0; i < count; ++i) {
+                        juce::File file(recentFiles[i]);
+                        const juce::String label =
+                            juce::String::formatted("%d  %s", i + 1, file.getFullPathName().toRawUTF8());
+                        recentMenu.addItem(kRecentFileMenuBaseId + i, label);
+                    }
+                }
+                menu.addSubMenu("Recent Files", recentMenu);
                 menu.addCommandItem(commandManager, CommandIDs::saveProject);
                 menu.addSeparator();
                 menu.addCommandItem(commandManager, CommandIDs::exportAudio);
@@ -71,6 +84,12 @@ juce::PopupMenu MenuHandler::getMenuForIndex(int menuIndex, const juce::String& 
 
 void MenuHandler::menuItemSelected(int menuItemID, int /*topLevelMenuIndex*/) {
     // Command items are handled automatically by ApplicationCommandManager
-    // All menu items are now handled by commands - this method can be empty
-    (void)menuItemID;  // Unused parameter
+    if (menuItemID >= kRecentFileMenuBaseId &&
+        menuItemID < kRecentFileMenuBaseId + kMaxRecentMenuItems) {
+        const int idx = menuItemID - kRecentFileMenuBaseId;
+        if (idx >= 0 && idx < recentFiles.size() && onRecentFileSelected) {
+            onRecentFileSelected(juce::File(recentFiles[idx]));
+        }
+        return;
+    }
 }

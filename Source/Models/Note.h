@@ -64,6 +64,8 @@ public:
     float getPitchOffset() const { return pitchOffset; }
     void setPitchOffset(float offset) { pitchOffset = offset; }
     float getAdjustedMidiNote() const { return midiNote + pitchOffset; }
+    float getVolumeDb() const { return volumeDb; }
+    void setVolumeDb(float db) { volumeDb = db; }
 
     // Delta pitch (per-frame deviation from base pitch in semitones)
     const std::vector<float>& getDeltaPitch() const { return deltaPitch; }
@@ -136,6 +138,7 @@ private:
 
     float midiNote = 60.0f;
     float pitchOffset = 0.0f;
+    float volumeDb = 0.0f; // Per-note gain in dB (0 = unity)
 
     std::vector<float> deltaPitch;  // Per-frame deviation from midiNote in semitones
 

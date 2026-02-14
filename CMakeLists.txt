@@ -197,6 +197,9 @@ file(GLOB_RECURSE HACHITUNE_CORE_SOURCES
     "Source/JuceHeader.h")
 
 list(FILTER HACHITUNE_CORE_SOURCES EXCLUDE REGEX "Source/Utils/UI/")
+list(APPEND HACHITUNE_CORE_SOURCES
+    "Source/Utils/SHA256Utils.cpp"
+    "Source/Utils/SHA256Utils.h")
 
 file(GLOB_RECURSE HACHITUNE_UI_SOURCES
     "Source/UI/*.cpp" "Source/UI/*.h"

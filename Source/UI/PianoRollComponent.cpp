@@ -760,16 +760,17 @@ void PianoRollComponent::drawNotes(juce::Graphics &g) {
   const bool isMultiDragging = pitchEditor && pitchEditor->isDraggingMultiNotes();
   const std::vector<Note *> *draggedNotes =
       isMultiDragging ? &pitchEditor->getDraggedNotes() : nullptr;
-  constexpr float outlinePadding = 2.0f;
 
   auto drawSelectedNoteOutline = [&g](float x, float y, float w, float h) {
+    constexpr float localOutlinePadding = 2.0f;
     constexpr float outlineThickness = 1.5f;
     constexpr float outlineCornerRadius = 3.5f;
 
     g.setColour(APP_COLOR_PRIMARY.withAlpha(0.95f));
     g.drawRoundedRectangle(
-        x - outlinePadding, y - outlinePadding, w + outlinePadding * 2.0f,
-        h + outlinePadding * 2.0f, outlineCornerRadius, outlineThickness);
+        x - localOutlinePadding, y - localOutlinePadding,
+        w + localOutlinePadding * 2.0f, h + localOutlinePadding * 2.0f,
+        outlineCornerRadius, outlineThickness);
   };
   auto getDeltaScaleHandleBounds = [](float x, float y, float w,
                                       float h) -> juce::Rectangle<float> {

@@ -11,12 +11,17 @@
  */
 class MenuHandler : public juce::MenuBarModel {
 public:
+    static constexpr int kRecentFileMenuBaseId = 0x3000;
+    static constexpr int kMaxRecentMenuItems = 10;
+
     MenuHandler();
     ~MenuHandler() override = default;
 
     void setPluginMode(bool isPlugin) { pluginMode = isPlugin; }
     void setUndoManager(PitchUndoManager* mgr) { undoManager = mgr; }
     void setCommandManager(juce::ApplicationCommandManager* mgr) { commandManager = mgr; }
+    void setRecentFiles(const juce::StringArray& files) { recentFiles = files; }
+    void setOnRecentFileSelected(std::function<void(const juce::File&)> cb) { onRecentFileSelected = std::move(cb); }
 
     // MenuBarModel interface
     juce::StringArray getMenuBarNames() override;
@@ -27,6 +32,8 @@ private:
     bool pluginMode = false;
     PitchUndoManager* undoManager = nullptr;
     juce::ApplicationCommandManager* commandManager = nullptr;
+    juce::StringArray recentFiles;
+    std::function<void(const juce::File&)> onRecentFileSelected;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MenuHandler)
 };

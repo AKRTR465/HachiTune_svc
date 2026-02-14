@@ -26,17 +26,72 @@ public:
 class PitchOffsetAction : public UndoableAction
 {
 public:
-    PitchOffsetAction(Note* note, float oldOffset, float newOffset)
-        : note(note), oldOffset(oldOffset), newOffset(newOffset) {}
+    PitchOffsetAction(Note* note, float oldOffset, float newOffset,
+                      std::function<void(Note*)> onNoteChanged = nullptr)
+        : note(note), oldOffset(oldOffset), newOffset(newOffset),
+          onNoteChanged(onNoteChanged) {}
     
-    void undo() override { if (note) note->setPitchOffset(oldOffset); }
-    void redo() override { if (note) note->setPitchOffset(newOffset); }
+    void undo() override
+    {
+        if (!note) return;
+        note->setPitchOffset(oldOffset);
+        note->markDirty();
+        if (onNoteChanged)
+            onNoteChanged(note);
+    }
+    void redo() override
+    {
+        if (!note) return;
+        note->setPitchOffset(newOffset);
+        note->markDirty();
+        if (onNoteChanged)
+            onNoteChanged(note);
+    }
     juce::String getName() const override { return "Change Pitch Offset"; }
     
 private:
     Note* note;
     float oldOffset;
     float newOffset;
+    std::function<void(Note*)> onNoteChanged;
+};
+
+/**
+ * Action for changing a note's volume (dB).
+ */
+class NoteVolumeAction : public UndoableAction
+{
+public:
+    NoteVolumeAction(Note* note, float oldVolumeDb, float newVolumeDb,
+                     std::function<void(Note*)> onNoteChanged = nullptr)
+        : note(note), oldVolumeDb(oldVolumeDb), newVolumeDb(newVolumeDb),
+          onNoteChanged(onNoteChanged) {}
+
+    void undo() override
+    {
+        if (!note) return;
+        note->setVolumeDb(oldVolumeDb);
+        note->markDirty();
+        if (onNoteChanged)
+            onNoteChanged(note);
+    }
+
+    void redo() override
+    {
+        if (!note) return;
+        note->setVolumeDb(newVolumeDb);
+        note->markDirty();
+        if (onNoteChanged)
+            onNoteChanged(note);
+    }
+
+    juce::String getName() const override { return "Change Note Volume"; }
+
+private:
+    Note* note;
+    float oldVolumeDb;
+    float newVolumeDb;
+    std::function<void(Note*)> onNoteChanged;
 };
 
 /**

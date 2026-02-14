@@ -131,6 +131,9 @@ private:
   void seek(double time);
   void resynthesizeIncremental(); // Incremental synthesis on edit
   void showSettings();
+  void openRecentFile(const juce::File &file);
+  void addRecentFile(const juce::File &file);
+  void refreshRecentFilesMenu();
 
   void onNoteSelected(Note *note);
   void onPitchEdited();
@@ -143,6 +146,7 @@ private:
   bool isInferenceBusy() const;
 
   void loadAudioFile(const juce::File &file);
+  void openProjectFile(const juce::File &file);
   void analyzeAudio();
   void analyzeAudio(
       Project &targetProject,
@@ -179,6 +183,7 @@ private:
   std::unique_ptr<SettingsOverlay> settingsOverlay;
 
   std::unique_ptr<juce::FileChooser> fileChooser;
+  juce::StringArray recentFiles;
 
   bool isPlaying = false;
 

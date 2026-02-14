@@ -82,6 +82,8 @@ public:
     juce::File getFilePath() const { return filePath; }
     void setProjectFilePath(const juce::File& file) { projectFilePath = file; }
     juce::File getProjectFilePath() const { return projectFilePath; }
+    void setAudioSha256(const juce::String& sha) { audioSha256 = sha; }
+    juce::String getAudioSha256() const { return audioSha256; }
     juce::String getName() const { return name; }
     void setName(const juce::String& n) { name = n; }
     
@@ -147,6 +149,7 @@ private:
     juce::String name = "Untitled";
     juce::File filePath;
     juce::File projectFilePath;
+    juce::String audioSha256;
     
     AudioData audioData;
     std::vector<Note> notes;
