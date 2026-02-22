@@ -75,6 +75,29 @@ private:
     }
 
     juce::Font getPopupMenuFont() override { return AppFont::getFont(15.0f); }
+
+    void drawButtonBackground(juce::Graphics &g, juce::Button &button,
+                              const juce::Colour &backgroundColour,
+                              bool shouldDrawButtonAsHighlighted,
+                              bool shouldDrawButtonAsDown) override {
+      auto bounds = button.getLocalBounds().toFloat().reduced(0.5f);
+      auto fill = backgroundColour;
+
+      if (shouldDrawButtonAsDown)
+        fill = fill.brighter(0.08f);
+      else if (shouldDrawButtonAsHighlighted)
+        fill = fill.brighter(0.04f);
+
+      g.setColour(fill);
+      g.fillRoundedRectangle(bounds, 8.0f);
+
+      const bool isActiveTab =
+          static_cast<bool>(button.getProperties().getWithDefault("isActiveTab",
+                                                                  false));
+      g.setColour((isActiveTab ? APP_COLOR_PRIMARY : APP_COLOR_BORDER)
+                      .withAlpha(isActiveTab ? 0.62f : 0.75f));
+      g.drawRoundedRectangle(bounds, 8.0f, 1.0f);
+    }
   };
 
   enum class SettingsTab { General, Audio };
@@ -86,6 +109,7 @@ private:
   void updateSampleRates();
   void updateBufferSizes();
   void applyAudioSettings();
+  void syncToSystemOutputIfNeeded();
   void setActiveTab(SettingsTab tab);
   void updateTabButtonStyles();
   void updateTabVisibility();
@@ -134,12 +158,11 @@ private:
   juce::Label outputChannelsLabel;
   StyledComboBox outputChannelsComboBox;
 
-  juce::StringArray cachedOutputDevices;
-  juce::String cachedOutputDeviceName;
-  juce::String cachedDeviceTypeName;
+  juce::String preferredAudioOutputDevice;
 
   juce::String currentDevice = "CPU";
   bool followSystemAudioOutput = true;
+  bool isRefreshingAudioControls = false;
   bool hasLoadedSettings = false;
   int gpuDeviceId = 0;
   juce::String lastConfirmedDevice = "CPU";
@@ -154,6 +177,7 @@ private:
   juce::TextButton audioTabButton;
   juce::Rectangle<int> cardBounds;
   juce::Rectangle<int> sidebarBounds;
+  juce::Rectangle<int> tabListBounds;
   juce::Array<int> separatorYs;
   float cornerRadius = 10.0f;
 

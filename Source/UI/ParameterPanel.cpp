@@ -169,12 +169,17 @@ public:
 
     void drawPopupMenuBackground(juce::Graphics& g, int width, int height) override
     {
-        const auto area = juce::Rectangle<float>(
-            1.0f, 1.0f, static_cast<float>(width - 2), static_cast<float>(height - 2));
-        g.setColour(APP_COLOR_SURFACE_RAISED.withMultipliedBrightness(0.96f));
-        g.fillRoundedRectangle(area, 9.0f);
-        g.setColour(APP_COLOR_BORDER.withAlpha(0.9f));
-        g.drawRoundedRectangle(area, 9.0f, 1.0f);
+        const auto bounds = juce::Rectangle<float>(
+            0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height));
+        const auto area = bounds.reduced(0.5f);
+        juce::Path shape;
+        shape.addRoundedRectangle(area, 9.0f);
+
+        // Single-layer rounded menu background (darker) to avoid square-inside-round look.
+        g.setColour(APP_COLOR_SURFACE_ALT.withMultipliedBrightness(0.82f));
+        g.fillPath(shape);
+        g.setColour(APP_COLOR_BORDER.withAlpha(0.92f));
+        g.strokePath(shape, juce::PathStrokeType(1.0f));
     }
 };
 
@@ -193,6 +198,7 @@ public:
           isSelected(selected),
           onHover(std::move(hoverCallback))
     {
+        setOpaque(false);
     }
 
     void getIdealSize(int& idealWidth, int& idealHeight) override

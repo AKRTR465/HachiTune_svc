@@ -46,6 +46,12 @@ public:
   void setFollowSystemAudioOutput(bool follow) {
     followSystemAudioOutput = follow;
   }
+  juce::String getPreferredAudioOutputDevice() const {
+    return preferredAudioOutputDevice;
+  }
+  void setPreferredAudioOutputDevice(const juce::String &name) {
+    preferredAudioOutputDevice = name;
+  }
 
   // View settings
   void setShowDeltaPitch(bool show) { showDeltaPitch = show; }
@@ -89,6 +95,7 @@ private:
   bool showUvInterpolationDebug = false;
   bool showActualF0Debug = false;
   bool followSystemAudioOutput = true;
+  juce::String preferredAudioOutputDevice;
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SettingsManager)
 };

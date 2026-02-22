@@ -75,8 +75,7 @@ public:
                            height));
 
 #if JUCE_MAC
-        return juce::Font(
-            juce::FontOptions("Hiragino Sans", height, juce::Font::plain));
+        return juce::Font(juce::FontOptions(height));
 #elif JUCE_WINDOWS
         return juce::Font(
             juce::FontOptions("Yu Gothic UI", height, juce::Font::plain));
@@ -95,8 +94,7 @@ public:
                 .boldened();
 
 #if JUCE_MAC
-        return juce::Font(
-            juce::FontOptions("Hiragino Sans", height, juce::Font::bold));
+        return juce::Font(juce::FontOptions(height)).boldened();
 #elif JUCE_WINDOWS
         return juce::Font(
             juce::FontOptions("Yu Gothic UI", height, juce::Font::bold));

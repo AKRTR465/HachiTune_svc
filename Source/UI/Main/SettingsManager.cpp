@@ -127,6 +127,9 @@ void SettingsManager::loadConfig() {
         if (configObj->hasProperty("followSystemAudioOutput"))
           followSystemAudioOutput =
               static_cast<bool>(configObj->getProperty("followSystemAudioOutput"));
+        if (configObj->hasProperty("preferredAudioOutputDevice"))
+          preferredAudioOutputDevice =
+              configObj->getProperty("preferredAudioOutputDevice").toString();
       }
     }
   }
@@ -163,6 +166,7 @@ void SettingsManager::saveConfig() {
   config->setProperty("showUvInterpolationDebug", showUvInterpolationDebug);
   config->setProperty("showActualF0Debug", showActualF0Debug);
   config->setProperty("followSystemAudioOutput", followSystemAudioOutput);
+  config->setProperty("preferredAudioOutputDevice", preferredAudioOutputDevice);
 
   juce::String jsonText = juce::JSON::toString(juce::var(config.get()));
   configFile.replaceWithText(jsonText);

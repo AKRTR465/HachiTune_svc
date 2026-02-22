@@ -15,6 +15,25 @@
 namespace {
 constexpr int kFollowSystemOutputId = 1;
 
+juce::String resolveDefaultOutputDeviceName(juce::AudioDeviceManager *deviceManager) {
+  if (deviceManager == nullptr)
+    return {};
+
+  auto *currentType = deviceManager->getCurrentDeviceTypeObject();
+  if (currentType == nullptr)
+    return {};
+
+  auto devices = currentType->getDeviceNames(false);
+  const int defaultIndex = currentType->getDefaultDeviceIndex(false);
+  if (juce::isPositiveAndBelow(defaultIndex, devices.size()))
+    return devices[defaultIndex];
+
+  if (devices.size() > 0)
+    return devices[0];
+
+  return {};
+}
+
 #ifdef _WIN32
 juce::StringArray getDxgiAdapterNames() {
   juce::StringArray names;
@@ -220,13 +239,14 @@ SettingsComponent::SettingsComponent(
 
   // Info label
   infoLabel.setColour(juce::Label::textColourId, APP_COLOR_TEXT_MUTED);
-  infoLabel.setFont(AppFont::getFont(13.0f));
+  infoLabel.setFont(AppFont::getFont(15.0f));
   infoLabel.setJustificationType(juce::Justification::topLeft);
   addAndMakeVisible(infoLabel);
 
   // Audio device settings (standalone mode only)
   if (!pluginMode && deviceManager != nullptr) {
     deviceManager->addChangeListener(this);
+    startTimerHz(1);
 
     audioSectionLabel.setText(TR("settings.audio"), juce::dontSendNotification);
     audioSectionLabel.setFont(AppFont::getBoldFont(15.0f));
@@ -322,12 +342,16 @@ SettingsComponent::~SettingsComponent() {
 
 void SettingsComponent::changeListenerCallback(
     juce::ChangeBroadcaster *source) {
-  if (source == deviceManager && activeTab == SettingsTab::Audio)
-    updateAudioOutputDevices(false);
+  if (source == deviceManager) {
+    syncToSystemOutputIfNeeded();
+    updateAudioOutputDevices(true);
+  }
 }
 
 void SettingsComponent::timerCallback() {
-  // Disabled polling to avoid UI stalls from device enumeration on some drivers.
+  if (!followSystemAudioOutput || pluginMode || deviceManager == nullptr)
+    return;
+  syncToSystemOutputIfNeeded();
 }
 
 void SettingsComponent::paint(juce::Graphics &g) {
@@ -343,12 +367,23 @@ void SettingsComponent::paint(juce::Graphics &g) {
   g.fillRoundedRectangle(bounds, cornerRadius);
 
   if (!sidebarBounds.isEmpty()) {
-    g.setColour(APP_COLOR_SURFACE);
-    g.fillRect(sidebarBounds);
+    // Keep only a subtle divider; remove the outer sidebar layer to reduce nesting.
     g.setColour(APP_COLOR_BORDER_SUBTLE);
     g.drawLine((float)sidebarBounds.getRight(), (float)sidebarBounds.getY(),
                (float)sidebarBounds.getRight(),
                (float)sidebarBounds.getBottom(), 1.0f);
+  }
+
+  if (!tabListBounds.isEmpty()) {
+    auto tabCard = tabListBounds.toFloat();
+    juce::ColourGradient tabGradient(APP_COLOR_SURFACE_RAISED, tabCard.getX(),
+                                     tabCard.getY(), APP_COLOR_SURFACE,
+                                     tabCard.getX(), tabCard.getBottom(),
+                                     false);
+    g.setGradientFill(tabGradient);
+    g.fillRoundedRectangle(tabCard, 10.0f);
+    g.setColour(APP_COLOR_BORDER.withAlpha(0.85f));
+    g.drawRoundedRectangle(tabCard.reduced(0.5f), 10.0f, 1.0f);
   }
 
   if (!cardBounds.isEmpty()) {
@@ -374,15 +409,25 @@ void SettingsComponent::paint(juce::Graphics &g) {
 void SettingsComponent::resized() {
   auto bounds = getLocalBounds().reduced(16);
   separatorYs.clear();
+  tabListBounds = {};
 
   const int sidebarWidth = 140;
   sidebarBounds = bounds.removeFromLeft(sidebarWidth);
 
-  auto tabArea = sidebarBounds.reduced(10, 10);
+  auto tabAreaBounds = sidebarBounds.reduced(8, 10);
   const int tabHeight = 32;
+  const int tabGap = 6;
+  const int tabCount = audioTabButton.isVisible() ? 2 : 1;
+  const int tabContainerHeight = 16 + tabCount * tabHeight + (tabCount - 1) * tabGap;
+  tabListBounds =
+      tabAreaBounds.withHeight(juce::jmin(tabAreaBounds.getHeight(), tabContainerHeight));
+
+  auto tabArea = tabListBounds.reduced(8, 8);
   generalTabButton.setBounds(tabArea.removeFromTop(tabHeight));
-  tabArea.removeFromTop(6);
-  audioTabButton.setBounds(tabArea.removeFromTop(tabHeight));
+  if (audioTabButton.isVisible()) {
+    tabArea.removeFromTop(tabGap);
+    audioTabButton.setBounds(tabArea.removeFromTop(tabHeight));
+  }
 
   bounds.removeFromLeft(10);
 
@@ -395,8 +440,10 @@ void SettingsComponent::resized() {
 
   const int rowHeight = 32;
   const int rowGap = 8;
-  const int labelWidth = 150;
-  const int controlWidth = 190;
+  const int controlWidth =
+      juce::jlimit(190, 300, content.getWidth() / 3);
+  const int labelWidth =
+      juce::jlimit(180, 320, content.getWidth() - controlWidth - 24);
 
   auto layoutRow = [&](juce::Label &label, juce::Component &control) {
     auto row = content.removeFromTop(rowHeight);
@@ -444,6 +491,12 @@ void SettingsComponent::resized() {
 }
 
 void SettingsComponent::comboBoxChanged(juce::ComboBox *comboBox) {
+  if (isRefreshingAudioControls &&
+      (comboBox == &audioDeviceTypeComboBox || comboBox == &audioOutputComboBox ||
+       comboBox == &sampleRateComboBox || comboBox == &bufferSizeComboBox ||
+       comboBox == &outputChannelsComboBox))
+    return;
+
   if (comboBox == &languageComboBox) {
     int selectedId = languageComboBox.getSelectedId();
     if (selectedId == 1) {
@@ -543,18 +596,14 @@ void SettingsComponent::comboBoxChanged(juce::ComboBox *comboBox) {
       const auto *currentType = deviceManager->getCurrentDeviceTypeObject();
       if (currentType == nullptr || currentType->getTypeName() != targetType)
         deviceManager->setCurrentAudioDeviceType(targetType, true);
-      updateAudioOutputDevices(false);
+      updateAudioOutputDevices(true);
     }
   } else if (comboBox == &audioOutputComboBox) {
     followSystemAudioOutput =
         (audioOutputComboBox.getSelectedId() == kFollowSystemOutputId);
-    if (settingsManager) {
-      settingsManager->setFollowSystemAudioOutput(followSystemAudioOutput);
-      settingsManager->saveConfig();
-    }
+    if (!followSystemAudioOutput && audioOutputComboBox.getSelectedId() > kFollowSystemOutputId)
+      preferredAudioOutputDevice = audioOutputComboBox.getText();
     applyAudioSettings();
-    updateSampleRates();
-    updateBufferSizes();
   } else if (comboBox == &sampleRateComboBox ||
              comboBox == &bufferSizeComboBox ||
              comboBox == &outputChannelsComboBox) {
@@ -583,17 +632,24 @@ void SettingsComponent::setActiveTab(SettingsTab tab) {
 
 void SettingsComponent::updateTabButtonStyles() {
   auto applyStyle = [&](juce::TextButton &button, bool isActive) {
+    const auto activeBg = APP_COLOR_PRIMARY.withAlpha(0.22f);
+    const auto inactiveBg = APP_COLOR_SURFACE_ALT.withAlpha(0.75f);
+    const auto activeText = APP_COLOR_TEXT_PRIMARY;
+    const auto inactiveText = APP_COLOR_TEXT_MUTED;
+
     if (isActive) {
-      button.setColour(juce::TextButton::buttonColourId,
-                       APP_COLOR_PRIMARY);
-      button.setColour(juce::TextButton::textColourOffId,
-                       juce::Colours::white);
+      button.setColour(juce::TextButton::buttonColourId, activeBg);
+      button.setColour(juce::TextButton::buttonOnColourId, activeBg);
+      button.setColour(juce::TextButton::textColourOffId, activeText);
+      button.setColour(juce::TextButton::textColourOnId, activeText);
     } else {
-      button.setColour(juce::TextButton::buttonColourId,
-                       APP_COLOR_SURFACE);
-      button.setColour(juce::TextButton::textColourOffId,
-                       APP_COLOR_TEXT_MUTED);
+      button.setColour(juce::TextButton::buttonColourId, inactiveBg);
+      button.setColour(juce::TextButton::buttonOnColourId, inactiveBg);
+      button.setColour(juce::TextButton::textColourOffId, inactiveText);
+      button.setColour(juce::TextButton::textColourOnId, inactiveText);
     }
+
+    button.getProperties().set("isActiveTab", isActive);
   };
 
   applyStyle(generalTabButton, activeTab == SettingsTab::General);
@@ -940,6 +996,7 @@ void SettingsComponent::loadSettings() {
     gpuDeviceId = settingsManager->getGPUDeviceId();
     pitchDetectorType = settingsManager->getPitchDetectorType();
     followSystemAudioOutput = settingsManager->getFollowSystemAudioOutput();
+    preferredAudioOutputDevice = settingsManager->getPreferredAudioOutputDevice();
     showSomeSegmentsDebug = settingsManager->getShowSomeSegmentsDebug();
     showSomeValuesDebug = settingsManager->getShowSomeValuesDebug();
     showUvInterpolationDebug = settingsManager->getShowUvInterpolationDebug();
@@ -1027,6 +1084,7 @@ void SettingsComponent::saveSettings() {
     settingsManager->setShowUvInterpolationDebug(showUvInterpolationDebug);
     settingsManager->setShowActualF0Debug(showActualF0Debug);
     settingsManager->setFollowSystemAudioOutput(followSystemAudioOutput);
+    settingsManager->setPreferredAudioOutputDevice(preferredAudioOutputDevice);
     settingsManager->saveConfig();
   }
 }
@@ -1035,7 +1093,10 @@ void SettingsComponent::updateAudioDeviceTypes() {
   if (deviceManager == nullptr)
     return;
 
-  audioDeviceTypeComboBox.clear();
+  const juce::ScopedValueSetter<bool> refreshingAudioUi(
+      isRefreshingAudioControls, true);
+
+  audioDeviceTypeComboBox.clear(juce::dontSendNotification);
   audioDeviceTypeOrder.clear();
 
   auto &types = deviceManager->getAvailableDeviceTypes();
@@ -1068,52 +1129,66 @@ void SettingsComponent::updateAudioDeviceTypes() {
 }
 
 void SettingsComponent::updateAudioOutputDevices(bool force) {
+  juce::ignoreUnused(force);
   if (deviceManager == nullptr)
     return;
 
-  if (auto *currentType = deviceManager->getCurrentDeviceTypeObject()) {
-    juce::StringArray devices;
-    if (force) {
-      devices = currentType->getDeviceNames(false); // false = output devices
-      cachedOutputDevices = devices;
-      cachedDeviceTypeName = currentType->getTypeName();
-    } else {
-      if (cachedDeviceTypeName != currentType->getTypeName())
-        return;
-      devices = cachedOutputDevices;
-    }
+  const juce::ScopedValueSetter<bool> refreshingAudioUi(
+      isRefreshingAudioControls, true);
+
+  auto *currentType = deviceManager->getCurrentDeviceTypeObject();
+  if (currentType != nullptr) {
+    auto devices = currentType->getDeviceNames(false); // false = output devices
 
     juce::String currentName;
     if (auto *audioDevice = deviceManager->getCurrentAudioDevice())
       currentName = audioDevice->getName();
 
-    if (!force && currentName == cachedOutputDeviceName) {
-      return;
-    }
-
-    cachedOutputDeviceName = currentName;
-
-    audioOutputComboBox.clear();
+    audioOutputComboBox.clear(juce::dontSendNotification);
     audioOutputComboBox.addItem("System Default", kFollowSystemOutputId);
     for (int i = 0; i < devices.size(); ++i)
       audioOutputComboBox.addItem(devices[i], i + 2);
 
-    if (followSystemAudioOutput) {
-      audioOutputComboBox.setSelectedId(kFollowSystemOutputId,
-                                        juce::dontSendNotification);
-    } else {
-      for (int i = 0; i < devices.size(); ++i) {
-        if (devices[i] == currentName) {
-          audioOutputComboBox.setSelectedId(i + 2,
-                                            juce::dontSendNotification);
-          break;
+    int targetId = kFollowSystemOutputId;
+    if (!followSystemAudioOutput) {
+      int preferredIdx = devices.indexOf(preferredAudioOutputDevice);
+      if (preferredIdx >= 0) {
+        targetId = preferredIdx + 2;
+      } else {
+        int currentIdx = devices.indexOf(currentName);
+        if (currentIdx >= 0) {
+          targetId = currentIdx + 2;
+          preferredAudioOutputDevice = currentName;
+        } else if (devices.size() > 0) {
+          targetId = 2;
+          preferredAudioOutputDevice = devices[0];
+        } else {
+          followSystemAudioOutput = true;
+          targetId = kFollowSystemOutputId;
         }
       }
-      if (audioOutputComboBox.getSelectedId() == 0)
-        audioOutputComboBox.setSelectedId(kFollowSystemOutputId,
-                                          juce::dontSendNotification);
     }
+
+    audioOutputComboBox.setSelectedId(targetId, juce::dontSendNotification);
+    sampleRateComboBox.setEnabled(!followSystemAudioOutput);
+    bufferSizeComboBox.setEnabled(!followSystemAudioOutput);
+    outputChannelsComboBox.setEnabled(!followSystemAudioOutput);
+
+    auto setup = deviceManager->getAudioDeviceSetup();
+    int currentOutputChannels = 2;
+    if (setup.useDefaultOutputChannels) {
+      if (auto *audioDevice = deviceManager->getCurrentAudioDevice())
+        currentOutputChannels =
+            juce::jlimit(1, 2,
+                         audioDevice->getActiveOutputChannels().countNumberOfSetBits());
+    } else {
+      currentOutputChannels =
+          juce::jlimit(1, 2, setup.outputChannels.countNumberOfSetBits());
+    }
+    outputChannelsComboBox.setSelectedId(currentOutputChannels,
+                                         juce::dontSendNotification);
   }
+
   updateSampleRates();
   updateBufferSizes();
 }
@@ -1122,7 +1197,10 @@ void SettingsComponent::updateSampleRates() {
   if (deviceManager == nullptr)
     return;
 
-  sampleRateComboBox.clear();
+  const juce::ScopedValueSetter<bool> refreshingAudioUi(
+      isRefreshingAudioControls, true);
+
+  sampleRateComboBox.clear(juce::dontSendNotification);
   if (auto *device = deviceManager->getCurrentAudioDevice()) {
     auto rates = device->getAvailableSampleRates();
     double currentRate = device->getCurrentSampleRate();
@@ -1146,7 +1224,10 @@ void SettingsComponent::updateBufferSizes() {
   if (deviceManager == nullptr)
     return;
 
-  bufferSizeComboBox.clear();
+  const juce::ScopedValueSetter<bool> refreshingAudioUi(
+      isRefreshingAudioControls, true);
+
+  bufferSizeComboBox.clear(juce::dontSendNotification);
   if (auto *device = deviceManager->getCurrentAudioDevice()) {
     auto sizes = device->getAvailableBufferSizes();
     int currentSize = device->getCurrentBufferSizeSamples();
@@ -1170,21 +1251,48 @@ void SettingsComponent::applyAudioSettings() {
 
   auto setup = deviceManager->getAudioDeviceSetup();
   const auto originalSetup = setup;
-  const bool followSystemOutput =
-      (audioOutputComboBox.getSelectedId() == kFollowSystemOutputId) ||
-      followSystemAudioOutput;
-  followSystemAudioOutput = followSystemOutput;
+  followSystemAudioOutput =
+      (audioOutputComboBox.getSelectedId() == kFollowSystemOutputId);
 
-  // Get selected output device
-  if (followSystemOutput) {
-    setup.outputDeviceName.clear();
-  } else if (audioOutputComboBox.getSelectedId() > kFollowSystemOutputId) {
-    setup.outputDeviceName = audioOutputComboBox.getText();
+  juce::String targetOutputName;
+  if (followSystemAudioOutput) {
+    targetOutputName = resolveDefaultOutputDeviceName(deviceManager);
+
+    if (targetOutputName.isEmpty()) {
+      if (auto *audioDevice = deviceManager->getCurrentAudioDevice())
+        targetOutputName = audioDevice->getName();
+    }
+  } else {
+    if (audioOutputComboBox.getSelectedId() > kFollowSystemOutputId)
+      targetOutputName = audioOutputComboBox.getText();
+    else
+      targetOutputName = preferredAudioOutputDevice;
+
+    if (targetOutputName.isNotEmpty())
+      preferredAudioOutputDevice = targetOutputName;
   }
 
-  // Get selected sample rate
-  if (followSystemOutput) {
-    // Let JUCE choose supported defaults for the current system default device.
+  if (targetOutputName.isEmpty()) {
+    DBG("No valid output device name resolved, reinitializing default audio "
+        "devices.");
+    auto initError = deviceManager->initialiseWithDefaultDevices(0, 2);
+    if (initError.isNotEmpty()) {
+      DBG("Audio device reinit failed: " + initError);
+      return;
+    }
+
+    followSystemAudioOutput = true;
+    updateAudioOutputDevices(true);
+    return;
+  }
+
+  const bool outputDeviceChanged = (setup.outputDeviceName != targetOutputName);
+  setup.outputDeviceName = targetOutputName;
+  const bool useDefaultOutputChannels = followSystemAudioOutput || outputDeviceChanged;
+
+  // When following system default or switching output device, let JUCE pick a
+  // valid sample-rate/buffer pair for the destination device.
+  if (followSystemAudioOutput || outputDeviceChanged) {
     setup.sampleRate = 0.0;
     setup.bufferSize = 0;
   } else if (auto *device = deviceManager->getCurrentAudioDevice()) {
@@ -1199,18 +1307,73 @@ void SettingsComponent::applyAudioSettings() {
       setup.bufferSize = sizes[sizeIdx];
   }
 
-  // Output channels
-  int channels = outputChannelsComboBox.getSelectedId();
-  setup.outputChannels.setRange(0, channels, true);
+  if (useDefaultOutputChannels) {
+    setup.useDefaultOutputChannels = true;
+    setup.outputChannels.clear();
+  } else {
+    setup.useDefaultOutputChannels = false;
+    const int channels = juce::jlimit(1, 2, outputChannelsComboBox.getSelectedId());
+    setup.outputChannels.setRange(0, channels, true);
+  }
 
-  if (setup.outputDeviceName == originalSetup.outputDeviceName &&
-      std::abs(setup.sampleRate - originalSetup.sampleRate) < 1.0 &&
-      setup.bufferSize == originalSetup.bufferSize &&
-      setup.outputChannels == originalSetup.outputChannels) {
+  if (setup == originalSetup) {
     return;
   }
 
-  deviceManager->setAudioDeviceSetup(setup, true);
+  auto error = deviceManager->setAudioDeviceSetup(setup, true);
+  if (error.isNotEmpty() && (setup.sampleRate != 0.0 || setup.bufferSize != 0)) {
+    DBG("Audio setup failed, retrying with device defaults: " + error);
+    auto fallback = setup;
+    fallback.sampleRate = 0.0;
+    fallback.bufferSize = 0;
+    fallback.useDefaultOutputChannels = true;
+    fallback.outputChannels.clear();
+    error = deviceManager->setAudioDeviceSetup(fallback, true);
+  }
+
+  if (error.isNotEmpty()) {
+    DBG("Audio setup failed: " + error);
+    updateAudioOutputDevices(true);
+    return;
+  }
+
+  if (settingsManager) {
+    settingsManager->setFollowSystemAudioOutput(followSystemAudioOutput);
+    settingsManager->setPreferredAudioOutputDevice(preferredAudioOutputDevice);
+    settingsManager->saveConfig();
+  }
+
+  updateAudioOutputDevices(true);
+}
+
+void SettingsComponent::syncToSystemOutputIfNeeded() {
+  if (!followSystemAudioOutput || deviceManager == nullptr)
+    return;
+
+  const auto targetOutputName = resolveDefaultOutputDeviceName(deviceManager);
+  if (targetOutputName.isEmpty())
+    return;
+
+  juce::String currentName;
+  if (auto *audioDevice = deviceManager->getCurrentAudioDevice())
+    currentName = audioDevice->getName();
+  if (currentName == targetOutputName)
+    return;
+
+  auto setup = deviceManager->getAudioDeviceSetup();
+  setup.outputDeviceName = targetOutputName;
+  setup.sampleRate = 0.0;
+  setup.bufferSize = 0;
+  setup.useDefaultOutputChannels = true;
+  setup.outputChannels.clear();
+
+  auto error = deviceManager->setAudioDeviceSetup(setup, true);
+  if (error.isNotEmpty()) {
+    DBG("Failed to follow system output switch: " + error);
+    auto initError = deviceManager->initialiseWithDefaultDevices(0, 2);
+    if (initError.isNotEmpty())
+      DBG("Audio device reinit failed: " + initError);
+  }
 }
 
 //==============================================================================
