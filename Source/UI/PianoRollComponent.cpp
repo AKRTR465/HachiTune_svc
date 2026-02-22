@@ -2500,8 +2500,112 @@ void PianoRollComponent::mouseMove(const juce::MouseEvent &e) {
 
   // Split mode guide line
   if (editMode == EditMode::Split && project) {
-    float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
-    float adjustedY = e.y - headerHeight + static_cast<float>(scrollY);
+  float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
+  float adjustedY = e.y - headerHeight + static_cast<float>(scrollY);
+
+  // Check if double-clicking on a smoothing handle (pitch tool)
+  if (editMode == EditMode::Select && pitchToolHandles && !pitchToolHandles->isEmpty()) {
+    int hitIndex = pitchToolHandles->hitTest(adjustedX, adjustedY);
+    if (hitIndex >= 0) {
+      const auto& handle = pitchToolHandles->getHandle(hitIndex);
+      if (handle.type == PitchToolHandles::HandleType::SmoothLeft ||
+          handle.type == PitchToolHandles::HandleType::SmoothRight) {
+        // Toggle smoothing: non-zero → 0, zero → 1
+        auto selectedNotes = project->getSelectedNotes();
+        if (!selectedNotes.empty()) {
+          auto rebuildAndNotify = [this]() {
+            PitchCurveProcessor::rebuildBaseFromNotes(*project);
+            PitchCurveProcessor::composeF0InPlace(*project, false);
+            if (onPitchEdited)
+              onPitchEdited();
+            if (onPitchEditFinished)
+              onPitchEditFinished();
+            repaint();
+          };
+
+          // Capture old params
+          std::vector<TransformParams> oldParams;
+          oldParams.reserve(selectedNotes.size());
+          for (auto* note : selectedNotes) {
+            if (note) {
+              TransformParams params;
+              params.tiltLeft = note->getTiltLeft();
+              params.tiltRight = note->getTiltRight();
+              params.varianceScale = note->getVarianceScale();
+              params.smoothLeftFrames = note->getSmoothLeftFrames();
+              params.smoothRightFrames = note->getSmoothRightFrames();
+              oldParams.push_back(params);
+            } else {
+              oldParams.emplace_back();
+            }
+          }
+
+          // Apply toggle
+          for (auto* note : selectedNotes) {
+            if (!note) continue;
+            if (handle.type == PitchToolHandles::HandleType::SmoothLeft) {
+              int current = note->getSmoothLeftFrames();
+              note->setSmoothLeftFrames(current != 0 ? 0 : 1);
+            } else {
+              int current = note->getSmoothRightFrames();
+              note->setSmoothRightFrames(current != 0 ? 0 : 1);
+            }
+            note->markDirty();
+          }
+
+          // Capture new params
+          std::vector<TransformParams> newParams;
+          newParams.reserve(selectedNotes.size());
+          for (auto* note : selectedNotes) {
+            if (note) {
+              TransformParams params;
+              params.tiltLeft = note->getTiltLeft();
+              params.tiltRight = note->getTiltRight();
+              params.varianceScale = note->getVarianceScale();
+              params.smoothLeftFrames = note->getSmoothLeftFrames();
+              params.smoothRightFrames = note->getSmoothRightFrames();
+              newParams.push_back(params);
+            } else {
+              newParams.emplace_back();
+            }
+          }
+
+          // Register undo
+          if (undoManager) {
+            auto onRangeChanged = [this, rebuildAndNotify](int, int) {
+              rebuildAndNotify();
+            };
+            auto action = std::make_unique<PitchToolAction>(
+                project, selectedNotes, oldParams, newParams, onRangeChanged);
+            undoManager->addAction(std::move(action));
+          }
+
+          // Rebuild and update
+          PitchCurveProcessor::rebuildBaseFromNotes(*project);
+          PitchCurveProcessor::composeF0InPlace(*project, false);
+
+          // Mark dirty range
+          int minFrame = std::numeric_limits<int>::max();
+          int maxFrame = std::numeric_limits<int>::min();
+          for (const auto* note : selectedNotes) {
+            if (note) {
+              minFrame = std::min(minFrame, note->getStartFrame());
+              maxFrame = std::max(maxFrame, note->getEndFrame());
+            }
+          }
+          if (minFrame <= maxFrame)
+            project->setF0DirtyRange(minFrame, maxFrame);
+
+          updatePitchToolHandlesFromSelection();
+          if (onPitchEdited) onPitchEdited();
+          if (onPitchEditFinished) onPitchEditFinished();
+          repaint();
+          return;
+        }
+      }
+    }
+  }
+
 
     Note *note = noteSplitter->findNoteAt(adjustedX, adjustedY);
     if (note) {

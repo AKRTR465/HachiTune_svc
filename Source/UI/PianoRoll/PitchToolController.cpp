@@ -164,8 +164,8 @@ void PitchToolController::applyOperation(std::vector<Note*>& notes,
     {
       case PitchToolHandles::HandleType::TiltLeft:
       {
-        // Negate amount so drag UP moves left edge UP (positive direction)
-        const float amount = -semitoneDelta;
+        // Drag UP = positive semitoneDelta = left edge goes UP
+        const float amount = semitoneDelta;
         DBG("  TiltLeft: amount=" << amount << " semitones");
         note->setTiltLeft(origParams.tiltLeft + amount);
         break;
