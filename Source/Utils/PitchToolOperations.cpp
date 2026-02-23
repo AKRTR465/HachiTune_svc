@@ -135,7 +135,13 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // Start with the original pristine curve
   std::vector<float> result = originalDelta;
 
-  // 1. Apply tilt transformations (combined left + right)
+  // 1. Apply variance scaling
+  // Variance first so that tilt ramp is preserved even at variance=0
+  if (std::abs(varianceScale - 1.0f) > 0.001f) {
+    result = reduceVariance(result, varianceScale);
+  }
+
+  // 2. Apply tilt transformations (combined left + right)
   // TiltLeft: pivot at right (1.0), negative amount
   if (std::abs(tiltLeft) > 0.001f) {
     result = tiltDeltaPitch(result, 1.0f, -tiltLeft);
@@ -144,11 +150,6 @@ std::vector<float> applyAllTransformations(const std::vector<float>& originalDel
   // TiltRight: pivot at left (0.0), positive amount
   if (std::abs(tiltRight) > 0.001f) {
     result = tiltDeltaPitch(result, 0.0f, tiltRight);
-  }
-
-  // 2. Apply variance scaling
-  if (std::abs(varianceScale - 1.0f) > 0.001f) {
-    result = reduceVariance(result, varianceScale);
   }
 
   // 3. Apply boundary smoothing

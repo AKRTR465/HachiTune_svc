@@ -58,8 +58,8 @@ struct AdjacentNoteContext
  * Applies all transformation parameters non-destructively.
  * 
  * This function chains multiple transformations in order:
- * 1. Tilt (left and right combined)
- * 2. Variance scaling
+ * 1. Variance scaling
+ * 2. Tilt (left and right combined)
  * 3. Boundary smoothing (left and right)
  * 
  * @param originalDelta The pristine deltaPitch curve from analysis (never modified)
