@@ -16,9 +16,9 @@ std::vector<float> tiltDeltaPitch(const std::vector<float>& deltaPitch,
                                   float amount);
 
 /**
- * Reduces deviations from the mean pitch value.
+ * Scales deviations from the base MIDI note (zero).
  *
- * `factor = 0` fully flattens to the mean and `factor = 1` keeps
+ * `factor = 0` flattens to zero (base MIDI note) and `factor = 1` keeps
  * the original contour unchanged.
  */
 std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,

@@ -50,12 +50,10 @@ std::vector<float> reduceVariance(const std::vector<float>& deltaPitch,
     return {};
   }
 
-  const float mean = computeMean(deltaPitch);
-
   std::vector<float> result(deltaPitch.size(), 0.0f);
   std::transform(deltaPitch.begin(), deltaPitch.end(), result.begin(),
-                 [mean, factor](float value) {
-                   return mean + (value - mean) * factor;
+                 [factor](float value) {
+                   return value * factor;
                  });
 
   return result;

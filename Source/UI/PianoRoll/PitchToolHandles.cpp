@@ -24,8 +24,8 @@ void PitchToolHandles::updateHandles(const std::vector<Note*>& selectedNotes,
     if (!note) continue;
     minStartFrame = std::min(minStartFrame, note->getStartFrame());
     maxEndFrame = std::max(maxEndFrame, note->getEndFrame());
-    minMidi = std::min(minMidi, note->getMidiNote());
-    maxMidi = std::max(maxMidi, note->getMidiNote());
+    minMidi = std::min(minMidi, note->getAdjustedMidiNote());
+    maxMidi = std::max(maxMidi, note->getAdjustedMidiNote());
   }
 
   // Convert to WORLD coordinates (not screen - mouse events are in world space)

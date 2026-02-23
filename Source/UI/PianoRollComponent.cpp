@@ -2018,6 +2018,8 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
     );
     auto selectedNotes = getSelectedNotes();
     if (pitchToolController->mouseDrag(adjustedEvent, selectedNotes, *coordMapper)) {
+      // Update handle positions to follow notes during drag
+      updatePitchToolHandlesFromSelection();
       if (onPitchEdited)
         onPitchEdited();
       if (shouldRepaint) {
@@ -2131,6 +2133,8 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
   // Handle multi-note drag
   if (pitchEditor->isDraggingMultiNotes()) {
     pitchEditor->updateMultiNoteDrag(adjustedY);
+    // Update handle positions to follow notes during drag
+    updatePitchToolHandlesFromSelection();
     if (shouldRepaint) {
       repaint();
       lastDragRepaintTime = now;
@@ -2146,6 +2150,9 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
     draggedNote->setPitchOffset(deltaSemitones);
     draggedNote->markDirty();
     applyDragBasePreview(deltaSemitones);
+    
+    // Update handle positions to follow notes during drag
+    updatePitchToolHandlesFromSelection();
 
     if (shouldRepaint) {
       repaint();
