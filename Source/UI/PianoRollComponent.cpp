@@ -118,6 +118,8 @@ PianoRollComponent::PianoRollComponent() {
   pitchEditor = std::make_unique<PitchEditor>();
   boxSelector = std::make_unique<BoxSelector>();
   noteSplitter = std::make_unique<NoteSplitter>();
+  pitchToolHandles = std::make_unique<PitchToolHandles>();
+  pitchToolController = std::make_unique<PitchToolController>();
   centeredMelComputer = std::make_unique<CenteredMelSpectrogram>(
       SAMPLE_RATE, N_FFT, WIN_SIZE, NUM_MELS, FMIN, FMAX);
 
@@ -154,6 +156,13 @@ PianoRollComponent::PianoRollComponent() {
   };
   pitchEditor->onBasePitchCacheInvalidated = [this]() {
     invalidateBasePitchCache();
+  };
+
+  // Setup pitchToolController callbacks
+  pitchToolController->onPitchEdited = [this]() {
+    repaint();
+    if (onPitchEdited)
+      onPitchEdited();
   };
 
   // Setup noteSplitter callbacks
@@ -209,6 +218,8 @@ int PianoRollComponent::getVisibleContentHeight() const {
 }
 
 void PianoRollComponent::paint(juce::Graphics &g) {
+  updatePitchToolHandlesFromSelection();
+
   // Apply rounded corner clipping
   const float cornerRadius = 8.0f;
   juce::Path clipPath;
@@ -235,7 +246,7 @@ void PianoRollComponent::paint(juce::Graphics &g) {
     drawBackgroundWaveform(g, mainArea);
   }
 
-  // Draw scrolled content (grid, notes, pitch curves)
+  // Draw scrolled content (grid, notes, pitch curves, handles)
   {
     juce::Graphics::ScopedSaveState saveState(g);
     g.reduceClipRegion(mainArea);
@@ -251,6 +262,11 @@ void PianoRollComponent::paint(juce::Graphics &g) {
     drawStretchGuides(g);
     drawSomeValuesDebugOverlay(g);
     drawSelectionRect(g);
+    
+    // Draw pitch tool handles in world space (transform applied by g.setOrigin above)
+    if (editMode == EditMode::Select && pitchToolHandles && !pitchToolHandles->isEmpty()) {
+      pitchToolHandles->draw(g);
+    }
   }
 
   // Draw timeline (above grid, scrolls horizontally)
@@ -1931,6 +1947,17 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
   if (e.y < headerHeight || e.x < pianoKeysWidth)
     return;
 
+  if (editMode == EditMode::Select && pitchToolController && pitchToolHandles) {
+    // Create adjusted mouse event with world coordinates (adjusted for header/piano keys and scroll)
+    juce::MouseEvent adjustedEvent = e.withNewPosition(
+      juce::Point<float>(adjustedX, adjustedY)
+    );
+    if (pitchToolController->mouseDown(adjustedEvent, *pitchToolHandles, getSelectedNotes(),
+                                       *coordMapper)) {
+      return;
+    }
+  }
+
   if (editMode == EditMode::Stretch) {
     int boundaryIndex =
         findStretchBoundaryIndex(adjustedX, stretchHandleHitPadding);
@@ -1948,6 +1975,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
     if (note) {
       project->deselectAllNotes();
       note->setSelected(true);
+      updatePitchToolHandlesFromSelection();
       if (onNoteSelected)
         onNoteSelected(note);
       repaint();
@@ -1956,6 +1984,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
 
     // Box selection fallback
     project->deselectAllNotes();
+    updatePitchToolHandlesFromSelection();
     boxSelector->startSelection(adjustedX, adjustedY);
     repaint();
     return;
@@ -2162,6 +2191,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
       // Single note selection and drag
       project->deselectAllNotes();
       note->setSelected(true);
+      updatePitchToolHandlesFromSelection();
 
       if (onNoteSelected)
         onNoteSelected(note);
@@ -2208,6 +2238,7 @@ void PianoRollComponent::mouseDown(const juce::MouseEvent &e) {
   } else {
     // Clicked on empty area - start box selection
     project->deselectAllNotes();
+    updatePitchToolHandlesFromSelection();
     boxSelector->startSelection(adjustedX, adjustedY);
     repaint();
   }
@@ -2293,6 +2324,26 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
       lastDragRepaintTime = now;
     }
     return;
+  }
+
+  if (editMode == EditMode::Select && pitchToolController &&
+      pitchToolController->isDragging()) {
+    // Create adjusted mouse event with world coordinates (adjusted for header/piano keys and scroll)
+    juce::MouseEvent adjustedEvent = e.withNewPosition(
+      juce::Point<float>(adjustedX, adjustedY)
+    );
+    auto selectedNotes = getSelectedNotes();
+    if (pitchToolController->mouseDrag(adjustedEvent, selectedNotes, *coordMapper)) {
+      // Update handle positions to follow notes during drag
+      updatePitchToolHandlesFromSelection();
+      if (onPitchEdited)
+        onPitchEdited();
+      if (shouldRepaint) {
+        repaint();
+        lastDragRepaintTime = now;
+      }
+      return;
+    }
   }
 
   if (isDeltaScaleDragging && project) {
@@ -2398,6 +2449,8 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
   // Handle multi-note drag
   if (pitchEditor->isDraggingMultiNotes()) {
     pitchEditor->updateMultiNoteDrag(adjustedY);
+    // Update handle positions to follow notes during drag
+    updatePitchToolHandlesFromSelection();
     if (shouldRepaint) {
       repaint();
       lastDragRepaintTime = now;
@@ -2419,6 +2472,9 @@ void PianoRollComponent::mouseDrag(const juce::MouseEvent &e) {
     draggedNote->setPitchOffset(deltaSemitones);
     draggedNote->markDirty();
     applyDragBasePreview(deltaSemitones);
+    
+    // Update handle positions to follow notes during drag
+    updatePitchToolHandlesFromSelection();
 
     if (shouldRepaint) {
       repaint();
@@ -2462,6 +2518,22 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
 
   if (editMode == EditMode::Stretch && stretchDrag.active) {
     finishStretchDrag();
+    repaint();
+    return;
+  }
+
+  if (editMode == EditMode::Select && pitchToolController &&
+      pitchToolController->isDragging()) {
+    auto onRangeChanged = [this](int startFrame, int endFrame) {
+      if (onReinterpolateUV)
+        onReinterpolateUV(startFrame, endFrame);
+    };
+    pitchToolController->mouseUp(e, undoManager, onRangeChanged);
+    updatePitchToolHandlesFromSelection();
+    if (onPitchEdited)
+      onPitchEdited();
+    if (onPitchEditFinished)
+      onPitchEditFinished();
     repaint();
     return;
   }
@@ -2581,6 +2653,7 @@ void PianoRollComponent::mouseUp(const juce::MouseEvent &e) {
       note->setSelected(true);
     }
     boxSelector->endSelection();
+    updatePitchToolHandlesFromSelection();
     repaint();
     return;
   }
@@ -2763,8 +2836,112 @@ void PianoRollComponent::mouseMove(const juce::MouseEvent &e) {
 
   // Split mode guide line
   if (editMode == EditMode::Split && project) {
-    float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
-    float adjustedY = e.y - headerHeight + static_cast<float>(scrollY);
+  float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
+  float adjustedY = e.y - headerHeight + static_cast<float>(scrollY);
+
+  // Check if double-clicking on a smoothing handle (pitch tool)
+  if (editMode == EditMode::Select && pitchToolHandles && !pitchToolHandles->isEmpty()) {
+    int hitIndex = pitchToolHandles->hitTest(adjustedX, adjustedY);
+    if (hitIndex >= 0) {
+      const auto& handle = pitchToolHandles->getHandle(hitIndex);
+      if (handle.type == PitchToolHandles::HandleType::SmoothLeft ||
+          handle.type == PitchToolHandles::HandleType::SmoothRight) {
+        // Toggle smoothing: non-zero → 0, zero → 1
+        auto selectedNotes = project->getSelectedNotes();
+        if (!selectedNotes.empty()) {
+          auto rebuildAndNotify = [this]() {
+            PitchCurveProcessor::rebuildBaseFromNotes(*project);
+            PitchCurveProcessor::composeF0InPlace(*project, false);
+            if (onPitchEdited)
+              onPitchEdited();
+            if (onPitchEditFinished)
+              onPitchEditFinished();
+            repaint();
+          };
+
+          // Capture old params
+          std::vector<TransformParams> oldParams;
+          oldParams.reserve(selectedNotes.size());
+          for (auto* note : selectedNotes) {
+            if (note) {
+              TransformParams params;
+              params.tiltLeft = note->getTiltLeft();
+              params.tiltRight = note->getTiltRight();
+              params.varianceScale = note->getVarianceScale();
+              params.smoothLeftFrames = note->getSmoothLeftFrames();
+              params.smoothRightFrames = note->getSmoothRightFrames();
+              oldParams.push_back(params);
+            } else {
+              oldParams.emplace_back();
+            }
+          }
+
+          // Apply toggle
+          for (auto* note : selectedNotes) {
+            if (!note) continue;
+            if (handle.type == PitchToolHandles::HandleType::SmoothLeft) {
+              int current = note->getSmoothLeftFrames();
+              note->setSmoothLeftFrames(current != 0 ? 0 : 1);
+            } else {
+              int current = note->getSmoothRightFrames();
+              note->setSmoothRightFrames(current != 0 ? 0 : 1);
+            }
+            note->markDirty();
+          }
+
+          // Capture new params
+          std::vector<TransformParams> newParams;
+          newParams.reserve(selectedNotes.size());
+          for (auto* note : selectedNotes) {
+            if (note) {
+              TransformParams params;
+              params.tiltLeft = note->getTiltLeft();
+              params.tiltRight = note->getTiltRight();
+              params.varianceScale = note->getVarianceScale();
+              params.smoothLeftFrames = note->getSmoothLeftFrames();
+              params.smoothRightFrames = note->getSmoothRightFrames();
+              newParams.push_back(params);
+            } else {
+              newParams.emplace_back();
+            }
+          }
+
+          // Register undo
+          if (undoManager) {
+            auto onRangeChanged = [this, rebuildAndNotify](int, int) {
+              rebuildAndNotify();
+            };
+            auto action = std::make_unique<PitchToolAction>(
+                project, selectedNotes, oldParams, newParams, onRangeChanged);
+            undoManager->addAction(std::move(action));
+          }
+
+          // Rebuild and update
+          PitchCurveProcessor::rebuildBaseFromNotes(*project);
+          PitchCurveProcessor::composeF0InPlace(*project, false);
+
+          // Mark dirty range
+          int minFrame = std::numeric_limits<int>::max();
+          int maxFrame = std::numeric_limits<int>::min();
+          for (const auto* note : selectedNotes) {
+            if (note) {
+              minFrame = std::min(minFrame, note->getStartFrame());
+              maxFrame = std::max(maxFrame, note->getEndFrame());
+            }
+          }
+          if (minFrame <= maxFrame)
+            project->setF0DirtyRange(minFrame, maxFrame);
+
+          updatePitchToolHandlesFromSelection();
+          if (onPitchEdited) onPitchEdited();
+          if (onPitchEditFinished) onPitchEditFinished();
+          repaint();
+          return;
+        }
+      }
+    }
+  }
+
 
     Note *note = noteSplitter->findNoteAt(adjustedX, adjustedY);
     if (note) {
@@ -2781,6 +2958,21 @@ void PianoRollComponent::mouseMove(const juce::MouseEvent &e) {
     splitGuideNote = nullptr;
     repaint();
   }
+
+  if (editMode == EditMode::Select && pitchToolHandles && !pitchToolHandles->isEmpty() &&
+      e.y >= headerHeight && e.x >= pianoKeysWidth) {
+    int hitIndex = pitchToolHandles->hitTest(e.position.x, e.position.y);
+    if (hitIndex != hoveredPitchToolHandle) {
+      hoveredPitchToolHandle = hitIndex;
+      pitchToolHandles->setHoveredHandleIndex(hitIndex);
+      repaint();
+    }
+  } else if (hoveredPitchToolHandle != -1) {
+    hoveredPitchToolHandle = -1;
+    if (pitchToolHandles)
+      pitchToolHandles->setHoveredHandleIndex(-1);
+    repaint();
+  }
 }
 
 void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent &e) {
@@ -2793,6 +2985,198 @@ void PianoRollComponent::mouseDoubleClick(const juce::MouseEvent &e) {
 
   float adjustedX = e.x - pianoKeysWidth + static_cast<float>(scrollX);
   float adjustedY = e.y - headerHeight + static_cast<float>(scrollY);
+
+  // Check if double-click is on a pitch tool handle
+  if (pitchToolHandles && !project->getSelectedNotes().empty()) {
+    int hitIndex = pitchToolHandles->hitTest(adjustedX, adjustedY);
+    if (hitIndex >= 0) {
+      const auto& handle = pitchToolHandles->getHandle(hitIndex);
+      
+      // ReduceVariance: Toggle variance scale between 0 (flatten) and 1 (original)
+      if (handle.type == PitchToolHandles::HandleType::ReduceVariance) {
+        
+        auto selectedNotes = project->getSelectedNotes();
+        
+        // Get current variance scale from first selected note
+        float currentScale = selectedNotes[0]->getVarianceScale();
+        
+        // Toggle: if ~1.0, set to 0.0 (flatten), else set to 1.0 (original)
+        float newScale = (std::abs(currentScale - 1.0f) < 0.001f) ? 0.0f : 1.0f;
+        
+        // Create undo action
+        if (undoManager) {
+          std::vector<float> oldScales;
+          std::vector<float> newScales;
+          oldScales.reserve(selectedNotes.size());
+          newScales.reserve(selectedNotes.size());
+          
+          for (auto* note : selectedNotes) {
+            if (note) {
+              oldScales.push_back(note->getVarianceScale());
+              newScales.push_back(newScale);
+            }
+          }
+          
+          auto action = std::make_unique<VarianceScaleAction>(
+              selectedNotes, oldScales, newScales,
+              [this]() {
+                // Rebuild pitch curves on change
+                PitchCurveProcessor::rebuildBaseFromNotes(*project);
+                PitchCurveProcessor::composeF0InPlace(*project, false);
+                if (onPitchEdited)
+                  onPitchEdited();
+                if (onPitchEditFinished)
+                  onPitchEditFinished();
+                repaint();
+              });
+          undoManager->addAction(std::move(action));
+        }
+        
+        // Apply new variance scale to all selected notes
+        for (auto* note : selectedNotes) {
+          if (note) {
+            note->setVarianceScale(newScale);
+            note->markDirty();
+          }
+        }
+        
+        // Rebuild pitch curves
+        PitchCurveProcessor::rebuildBaseFromNotes(*project);
+        PitchCurveProcessor::composeF0InPlace(*project, false);
+        
+        // Notify listeners
+        if (onPitchEdited)
+          onPitchEdited();
+        if (onPitchEditFinished)
+          onPitchEditFinished();
+        
+        repaint();
+        return;  // Don't fall through to note snap behavior
+      }
+      
+      // TiltLeft: Reset tiltLeft to 0
+      if (handle.type == PitchToolHandles::HandleType::TiltLeft) {
+        auto selectedNotes = project->getSelectedNotes();
+        
+        // Create undo action
+        if (undoManager) {
+          std::vector<float> oldTilts;
+          std::vector<float> oldMidiNotes;
+          oldTilts.reserve(selectedNotes.size());
+          oldMidiNotes.reserve(selectedNotes.size());
+          
+          for (auto* note : selectedNotes) {
+            if (note) {
+              oldTilts.push_back(note->getTiltLeft());
+              oldMidiNotes.push_back(note->getMidiNote());
+            }
+          }
+          
+          auto action = std::make_unique<TiltResetAction>(
+              selectedNotes, TiltResetAction::TiltSide::Left,
+              oldTilts, oldMidiNotes,
+              [this]() {
+                PitchCurveProcessor::rebuildBaseFromNotes(*project);
+                PitchCurveProcessor::composeF0InPlace(*project, false);
+                if (onPitchEdited)
+                  onPitchEdited();
+                if (onPitchEditFinished)
+                  onPitchEditFinished();
+                repaint();
+              });
+          undoManager->addAction(std::move(action));
+        }
+        
+        // Reset tiltLeft and adjust midiNote
+        for (auto* note : selectedNotes) {
+          if (note) {
+            const float oldTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+            const float baseline = note->getMidiNote() - oldTiltMean;
+            
+            note->setTiltLeft(0.0f);
+            
+            const float newTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+            note->setMidiNote(baseline + newTiltMean);
+            note->markDirty();
+          }
+        }
+        
+        // Rebuild pitch curves
+        PitchCurveProcessor::rebuildBaseFromNotes(*project);
+        PitchCurveProcessor::composeF0InPlace(*project, false);
+        
+        // Notify listeners
+        if (onPitchEdited)
+          onPitchEdited();
+        if (onPitchEditFinished)
+          onPitchEditFinished();
+        
+        repaint();
+        return;
+      }
+      
+      // TiltRight: Reset tiltRight to 0
+      if (handle.type == PitchToolHandles::HandleType::TiltRight) {
+        auto selectedNotes = project->getSelectedNotes();
+        
+        // Create undo action
+        if (undoManager) {
+          std::vector<float> oldTilts;
+          std::vector<float> oldMidiNotes;
+          oldTilts.reserve(selectedNotes.size());
+          oldMidiNotes.reserve(selectedNotes.size());
+          
+          for (auto* note : selectedNotes) {
+            if (note) {
+              oldTilts.push_back(note->getTiltRight());
+              oldMidiNotes.push_back(note->getMidiNote());
+            }
+          }
+          
+          auto action = std::make_unique<TiltResetAction>(
+              selectedNotes, TiltResetAction::TiltSide::Right,
+              oldTilts, oldMidiNotes,
+              [this]() {
+                PitchCurveProcessor::rebuildBaseFromNotes(*project);
+                PitchCurveProcessor::composeF0InPlace(*project, false);
+                if (onPitchEdited)
+                  onPitchEdited();
+                if (onPitchEditFinished)
+                  onPitchEditFinished();
+                repaint();
+              });
+          undoManager->addAction(std::move(action));
+        }
+        
+        // Reset tiltRight and adjust midiNote
+        for (auto* note : selectedNotes) {
+          if (note) {
+            const float oldTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+            const float baseline = note->getMidiNote() - oldTiltMean;
+            
+            note->setTiltRight(0.0f);
+            
+            const float newTiltMean = (note->getTiltLeft() + note->getTiltRight()) / 2.0f;
+            note->setMidiNote(baseline + newTiltMean);
+            note->markDirty();
+          }
+        }
+        
+        // Rebuild pitch curves
+        PitchCurveProcessor::rebuildBaseFromNotes(*project);
+        PitchCurveProcessor::composeF0InPlace(*project, false);
+        
+        // Notify listeners
+        if (onPitchEdited)
+          onPitchEdited();
+        if (onPitchEditFinished)
+          onPitchEditFinished();
+        
+        repaint();
+        return;
+      }
+    }
+  }
 
   // Check if double-clicking on a note
   Note *note = findNoteAt(adjustedX, adjustedY);
@@ -3134,6 +3518,7 @@ void PianoRollComponent::setProject(Project *proj) {
   pitchEditor->setSnapToSemitoneDragEnabled(snapToSemitoneDrag);
   pitchEditor->setPitchReferenceHz(pitchReferenceHz);
   noteSplitter->setProject(proj);
+  pitchToolController->setProject(proj);
 
   // Clear all caches when project changes to free memory
   invalidateBasePitchCache();
@@ -3142,6 +3527,8 @@ void PianoRollComponent::setProject(Project *proj) {
   cachedPixelsPerSecond = -1.0f;
   cachedWidth = 0;
   cachedHeight = 0;
+
+  updatePitchToolHandlesFromSelection();
 
   updateScrollBars();
   repaint();
@@ -3567,7 +3954,45 @@ void PianoRollComponent::setEditMode(EditMode mode) {
     hoveredStretchBoundaryIndex = -1;
   }
 
+  if (mode != EditMode::Select) {
+    hoveredPitchToolHandle = -1;
+    if (pitchToolHandles)
+      pitchToolHandles->setHoveredHandleIndex(-1);
+  }
+  updatePitchToolHandlesFromSelection();
+
   repaint();
+}
+
+std::vector<Note *> PianoRollComponent::getSelectedNotes() const {
+  if (!project)
+    return {};
+
+  std::vector<Note *> selected;
+  for (auto &note : project->getNotes()) {
+    if (note.isSelected())
+      selected.push_back(&note);
+  }
+  return selected;
+}
+
+void PianoRollComponent::updatePitchToolHandlesFromSelection() {
+  if (!pitchToolHandles || !coordMapper)
+    return;
+
+  if (!project || editMode != EditMode::Select) {
+    pitchToolHandles->clear();
+    hoveredPitchToolHandle = -1;
+    pitchToolHandles->setHoveredHandleIndex(-1);
+    return;
+  }
+
+  pitchToolHandles->updateHandles(getSelectedNotes(), *coordMapper);
+  if (hoveredPitchToolHandle >=
+      static_cast<int>(pitchToolHandles->getHandles().size())) {
+    hoveredPitchToolHandle = -1;
+    pitchToolHandles->setHoveredHandleIndex(-1);
+  }
 }
 
 std::vector<PianoRollComponent::StretchBoundary>

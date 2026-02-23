@@ -3,6 +3,8 @@
 #include "../JuceHeader.h"
 #include "../Models/Note.h"
 #include "../Models/Project.h"
+#include "PitchCurveProcessor.h"
+#include "TransformParams.h"
 #include <vector>
 #include <memory>
 #include <functional>
@@ -92,6 +94,132 @@ private:
     float oldVolumeDb;
     float newVolumeDb;
     std::function<void(Note*)> onNoteChanged;
+};
+
+/**
+ * Action for changing variance scale on multiple notes.
+ * Used for double-click toggle on smooth handles (flatten/restore).
+ */
+class VarianceScaleAction : public UndoableAction
+{
+public:
+    VarianceScaleAction(const std::vector<Note*>& notes,
+                        const std::vector<float>& oldScales,
+                        const std::vector<float>& newScales,
+                        std::function<void()> onChanged = nullptr)
+        : notes(notes), oldScales(oldScales), newScales(newScales),
+          onChanged(onChanged) {}
+
+    void undo() override
+    {
+        for (size_t i = 0; i < notes.size() && i < oldScales.size(); ++i) {
+            if (notes[i]) {
+                notes[i]->setVarianceScale(oldScales[i]);
+                notes[i]->markDirty();
+            }
+        }
+        if (onChanged)
+            onChanged();
+    }
+
+    void redo() override
+    {
+        for (size_t i = 0; i < notes.size() && i < newScales.size(); ++i) {
+            if (notes[i]) {
+                notes[i]->setVarianceScale(newScales[i]);
+                notes[i]->markDirty();
+            }
+        }
+        if (onChanged)
+            onChanged();
+    }
+
+    juce::String getName() const override { return "Toggle Variance Scale"; }
+
+private:
+    std::vector<Note*> notes;
+    std::vector<float> oldScales;
+    std::vector<float> newScales;
+    std::function<void()> onChanged;
+};
+
+/**
+ * Action for resetting tilt values on multiple notes.
+ * Used for double-click on TiltLeft/TiltRight handles to reset to 0.
+ */
+class TiltResetAction : public UndoableAction
+{
+public:
+    enum class TiltSide { Left, Right };
+    
+    TiltResetAction(const std::vector<Note*>& notes,
+                    TiltSide side,
+                    const std::vector<float>& oldTilts,
+                    const std::vector<float>& oldMidiNotes,
+                    std::function<void()> onChanged = nullptr)
+        : notes(notes), side(side), oldTilts(oldTilts), 
+          oldMidiNotes(oldMidiNotes), onChanged(onChanged) {}
+
+    void undo() override
+    {
+        for (size_t i = 0; i < notes.size() && i < oldTilts.size(); ++i) {
+            if (notes[i]) {
+                // Restore old tilt value
+                if (side == TiltSide::Left)
+                    notes[i]->setTiltLeft(oldTilts[i]);
+                else
+                    notes[i]->setTiltRight(oldTilts[i]);
+                
+                // Restore old midiNote position
+                if (i < oldMidiNotes.size())
+                    notes[i]->setMidiNote(oldMidiNotes[i]);
+                
+                notes[i]->markDirty();
+            }
+        }
+        if (onChanged)
+            onChanged();
+    }
+
+    void redo() override
+    {
+        for (size_t i = 0; i < notes.size(); ++i) {
+            if (notes[i]) {
+                // Reset tilt to 0
+                if (side == TiltSide::Left)
+                    notes[i]->setTiltLeft(0.0f);
+                else
+                    notes[i]->setTiltRight(0.0f);
+                
+                // Recalculate midiNote with new tiltMean
+                const float newTiltMean = (notes[i]->getTiltLeft() + notes[i]->getTiltRight()) / 2.0f;
+                if (i < oldMidiNotes.size()) {
+                    // Calculate baseline (old midiNote minus old tiltMean)
+                    const float oldTiltLeft = (side == TiltSide::Left) ? oldTilts[i] : notes[i]->getTiltLeft();
+                    const float oldTiltRight = (side == TiltSide::Right) ? oldTilts[i] : notes[i]->getTiltRight();
+                    const float oldTiltMean = (oldTiltLeft + oldTiltRight) / 2.0f;
+                    const float baseline = oldMidiNotes[i] - oldTiltMean;
+                    notes[i]->setMidiNote(baseline + newTiltMean);
+                }
+                
+                notes[i]->markDirty();
+            }
+        }
+        if (onChanged)
+            onChanged();
+    }
+
+    juce::String getName() const override 
+    { 
+        return side == TiltSide::Left ? "Reset Tilt Left" : "Reset Tilt Right"; 
+    }
+
+private:
+    std::vector<Note*> notes;
+    TiltSide side;
+    std::vector<float> oldTilts;
+    std::vector<float> oldMidiNotes;
+    std::function<void()> onChanged;
 };
 
 /**
@@ -775,6 +903,137 @@ private:
     std::vector<std::vector<float>> oldMel;
     std::vector<std::vector<float>> newMel;
     std::function<void(int, int)> onRangeChanged;
+};
+
+/**
+ * Undo action for pitch tool operations (tilt, variance, smooth).
+ * Stores transformation parameters, not full pitch curves.
+ */
+class PitchToolAction : public UndoableAction
+{
+public:
+  PitchToolAction(
+      Project* project,
+      std::vector<Note*> affectedNotes,
+      const std::vector<TransformParams>& oldParams,
+      const std::vector<TransformParams>& newParams,
+      std::function<void(int, int)> onRangeChanged = nullptr)
+      : project(project),
+        notes(std::move(affectedNotes)),
+        oldParams(oldParams),
+        newParams(newParams),
+        onRangeChanged(std::move(onRangeChanged)) {}
+
+  void undo() override
+  {
+    // Restore old transformation parameters
+    for (size_t i = 0; i < notes.size(); ++i)
+    {
+      if (notes[i] && i < oldParams.size())
+      {
+        const auto& params = oldParams[i];
+        notes[i]->setMidiNote(params.midiNote);
+        notes[i]->setTiltLeft(params.tiltLeft);
+        notes[i]->setTiltRight(params.tiltRight);
+        notes[i]->setVarianceScale(params.varianceScale);
+        notes[i]->setSmoothLeftFrames(params.smoothLeftFrames);
+        notes[i]->setSmoothRightFrames(params.smoothRightFrames);
+      }
+    }
+    
+    // Recompose audioData from originalDeltaPitch + restored parameters
+    if (project)
+    {
+      PitchCurveProcessor::rebuildBaseFromNotes(*project);
+      PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+      
+      // Mark dirty range for synthesis
+      if (!notes.empty())
+      {
+        int minFrame = std::numeric_limits<int>::max();
+        int maxFrame = std::numeric_limits<int>::min();
+        for (const auto* note : notes)
+        {
+          minFrame = std::min(minFrame, note->getStartFrame());
+          maxFrame = std::max(maxFrame, note->getEndFrame());
+        }
+        project->setF0DirtyRange(minFrame, maxFrame);
+      }
+    }
+    
+    // Trigger callbacks for visual updates
+    if (onRangeChanged && !notes.empty())
+    {
+      int minFrame = notes[0]->getStartFrame();
+      int maxFrame = notes[0]->getEndFrame();
+      for (const auto* note : notes)
+      {
+        minFrame = std::min(minFrame, note->getStartFrame());
+        maxFrame = std::max(maxFrame, note->getEndFrame());
+      }
+      onRangeChanged(minFrame, maxFrame);
+    }
+  }
+
+  void redo() override
+  {
+    // Restore new transformation parameters
+    for (size_t i = 0; i < notes.size(); ++i)
+    {
+      if (notes[i] && i < newParams.size())
+      {
+        const auto& params = newParams[i];
+        notes[i]->setMidiNote(params.midiNote);
+        notes[i]->setTiltLeft(params.tiltLeft);
+        notes[i]->setTiltRight(params.tiltRight);
+        notes[i]->setVarianceScale(params.varianceScale);
+        notes[i]->setSmoothLeftFrames(params.smoothLeftFrames);
+        notes[i]->setSmoothRightFrames(params.smoothRightFrames);
+      }
+    }
+    
+    // Recompose audioData from originalDeltaPitch + new parameters
+    if (project)
+    {
+      PitchCurveProcessor::rebuildBaseFromNotes(*project);
+      PitchCurveProcessor::composeF0InPlace(*project, /*applyUvMask=*/false);
+      
+      // Mark dirty range for synthesis
+      if (!notes.empty())
+      {
+        int minFrame = std::numeric_limits<int>::max();
+        int maxFrame = std::numeric_limits<int>::min();
+        for (const auto* note : notes)
+        {
+          minFrame = std::min(minFrame, note->getStartFrame());
+          maxFrame = std::max(maxFrame, note->getEndFrame());
+        }
+        project->setF0DirtyRange(minFrame, maxFrame);
+      }
+    }
+    
+    // Trigger callbacks for visual updates
+    if (onRangeChanged && !notes.empty())
+    {
+      int minFrame = notes[0]->getStartFrame();
+      int maxFrame = notes[0]->getEndFrame();
+      for (const auto* note : notes)
+      {
+        minFrame = std::min(minFrame, note->getStartFrame());
+        maxFrame = std::max(maxFrame, note->getEndFrame());
+      }
+      onRangeChanged(minFrame, maxFrame);
+    }
+  }
+
+  juce::String getName() const override { return "Apply Pitch Tool"; }
+
+private:
+  Project* project;
+  std::vector<Note*> notes;
+  std::vector<TransformParams> oldParams;
+  std::vector<TransformParams> newParams;
+  std::function<void(int, int)> onRangeChanged;
 };
 
 /**
